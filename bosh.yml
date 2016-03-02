@@ -1,0 +1,193 @@
+# <%
+# virtual_network_name = 'rj-boshnet'
+# subnet_name = 'rj-bosh'
+# rootdomain = "rj-test.io"
+# dns = '64.4.48.6, 40.90.4.6'
+# bosh_public_ip = '104.43.202.45'
+# subscription_id = '496f93c0-c3ea-4496-b110-27473cdb1b6d'
+# tenant_id = '9f0f0a9c-a123-4251-a989-a76facf5d45b'
+# client_id = '3fabeb4a-17a2-4a09-a101-90c25a177566'
+# client_secret = 'changeme'
+# resource_group_name = 'rj-bosh-res-group'
+# storage_account_name = 'rjboshstore'
+# storage_access_key = 'goPy5sChNc1PYcqj5gyS/0OYm1RPq0FGCCwkAe1zuesiBQCbBalrJg9Ei5IWvaAA1+zPHhV56ir/drbAHMrkWw=='
+# %>
+
+---
+name: bosh
+
+releases:
+- name: bosh
+  url: https://bosh.io/d/github.com/cloudfoundry/bosh?v=255.3
+  sha1: 1a3d61f968b9719d9afbd160a02930c464958bf4
+- name: bosh-azure-cpi
+  url: https://bosh.io/d/github.com/cloudfoundry-incubator/bosh-azure-cpi-release?v=7
+  sha1: 8df7b79458335188a1ecab83cf5ef9a82366baeb
+
+resource_pools:
+- name: vms
+  network: private
+  stemcell:
+    url: https://bosh.io/d/stemcells/bosh-azure-hyperv-ubuntu-trusty-go_agent?v=3169
+    sha1: ff13c47ac7ce121dee6153c1564bd8965edf9f59
+  cloud_properties:
+    instance_type: Standard_D1
+
+disk_pools:
+- name: disks
+  disk_size: 20_000
+
+networks:
+- name: public
+  type: vip
+  cloud_properties:
+    tcp_endpoints:
+    - "22:22"
+    - "4222:4222"
+    - "6868:6868"
+    - "25250:25250"
+    - "25555:25555"
+    - "25777:25777"
+    udp_endpoints:
+    - "68:68"
+    - "53:53"
+- name: private
+  type: manual
+  subnets:
+  - range: 10.0.0.0/24
+    gateway: 10.0.0.1
+    dns: [8.8.8.8]
+    cloud_properties:
+      virtual_network_name: rj-boshnet
+      subnet_name: rj-bosh
+
+jobs:
+- name: bosh
+  instances: 1
+
+  templates:
+  - {name: nats, release: bosh}
+  - {name: redis, release: bosh}
+  - {name: postgres, release: bosh}
+  - {name: blobstore, release: bosh}
+  - {name: director, release: bosh}
+  - {name: health_monitor, release: bosh}
+  - {name: registry, release: bosh}
+  - {name: cpi, release: bosh-azure-cpi}
+
+  resource_pool: vms
+  persistent_disk_pool: disks
+
+  networks:
+  - name: private
+    static_ips: [10.0.0.4]
+    default: [dns, gateway]
+  - name: public
+    static_ips: [104.43.202.45]
+
+  properties:
+    nats:
+      address: 127.0.0.1
+      user: nats
+      password: nats-password
+
+    redis:
+      listen_address: 127.0.0.1
+      address: 127.0.0.1
+      password: redis-password
+
+    postgres: &db
+      listen_address: 127.0.0.1
+      host: 127.0.0.1
+      user: postgres
+      password: postgres-password
+      database: bosh
+      adapter: postgres
+
+    registry:
+      address: 10.0.0.4
+      host: 10.0.0.4
+      db: *db
+      http: {user: admin, password: admin, port: 25777}
+      username: admin
+      password: admin
+      port: 25777
+
+    blobstore:
+      address: 10.0.0.4
+      port: 25250
+      provider: dav
+      director: {user: director, password: director-password}
+      agent: {user: agent, password: agent-password}
+
+    director:
+      address: 127.0.0.1
+      name: my-bosh
+      db: *db
+      cpi_job: cpi
+      max_threads: 10
+      user_management:
+        provider: local
+        local:
+          users:
+          - {name: admin, password: admin}
+          - {name: hm, password: hm-password}
+
+    hm:
+      director_account: {user: hm, password: hm-password}
+      resurrector_enabled: true
+
+    azure: &azure
+      environment: AzureCloud
+      subscription_id: 496f93c0-c3ea-4496-b110-27473cdb1b6d
+      tenant_id: 9f0f0a9c-a123-4251-a989-a76facf5d45b
+      client_id: 3fabeb4a-17a2-4a09-a101-90c25a177566
+      client_secret: changeme
+      resource_group_name: rj-bosh-res-group
+      storage_account_name: rjboshstore
+      storage_access_key: goPy5sChNc1PYcqj5gyS/0OYm1RPq0FGCCwkAe1zuesiBQCbBalrJg9Ei5IWvaAA1+zPHhV56ir/drbAHMrkWw==
+      ssh_user: vcap
+      ssh_certificate: |
+        -----BEGIN CERTIFICATE-----
+        MIIDtzCCAp+gAwIBAgIJAOc42LkTLES6MA0GCSqGSIb3DQEBCwUAMHIxCzAJBgNV
+        BAYTAlVTMQswCQYDVQQIDAJUWDEPMA0GA1UEBwwGRGFsbGFzMRAwDgYDVQQKDAdQ
+        aXZvdGFsMRkwFwYDVQQLDBBQaXZvdGFsIFNlcnZpY2VzMRgwFgYDVQQDDA9ib3No
+        LnJqLXRlc3QuaW8wHhcNMTYwMjI5MTkzMDU4WhcNMTcwMjI4MTkzMDU4WjByMQsw
+        CQYDVQQGEwJVUzELMAkGA1UECAwCVFgxDzANBgNVBAcMBkRhbGxhczEQMA4GA1UE
+        CgwHUGl2b3RhbDEZMBcGA1UECwwQUGl2b3RhbCBTZXJ2aWNlczEYMBYGA1UEAwwP
+        Ym9zaC5yai10ZXN0LmlvMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA
+        0oNkR2P0RkmfFPdlCEzVXIeB1yIVPBR/X8Qwy4Yf4lkXdgXRWn6cDmbu3cX5PC9O
+        f+CYmGERzKcw+KiXNm66UTBbM1TxVrLT00R7jztp8Rz0BUHElSViCGi6ku6DGq2I
+        nmwGhJmNpwZnmp0SNuJrMC8IU43H+vw5IADD2w32H7ZNHQd/+/rvyPcip9DhaOam
+        gIqfNNiWwXeJCJJBHHXOTB6p2AVw0gtqecVyM+1mYeqwx7FCfvb5K1R+XR91pzT1
+        JabhI+hwSKkUbFGSMiO9WBZoP7h4NAIfUYco7JplutS2zEOBDbWxZR0hwi8mA5X8
+        gHYBgwJy9kJNK5bbLlBXswIDAQABo1AwTjAdBgNVHQ4EFgQUJQeXeqDZFAx/pLHt
+        z/BptiVNwt8wHwYDVR0jBBgwFoAUJQeXeqDZFAx/pLHtz/BptiVNwt8wDAYDVR0T
+        BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAJZcJFm0k1VSkQr9hn56Luuh27nsf
+        HyB6MGP9XUSlPOlV45IRVIrhrqz5lYWsPV8iu+R7kV0dkSNqO5LXlybRdhWYd2dR
+        7JdXn8JpqaOlOGSGE8XaNNaazKG3d72bwhth+BIUmwNQzE3Ril/KZbKouli8oclP
+        nh4ucYceIqmLO6uz9wOCu3cWu8XaEOqei4ovCyuMKUfMRcwzTsaInvkglH9TIBlo
+        SaOAAPFPS22ovSllBQvN52Zr97SfUlPO5af2GiDh4N4rEUcAwrKVcQqAX33YGGgI
+        HA8jELO//SZHgqYhduBts5JcaiIn590Knd4fUZwyL41mK2IBO7rK2+CTfQ==
+        -----END CERTIFICATE-----
+
+    agent: {mbus: "nats://nats:nats-password@10.0.0.4:4222"}
+
+    ntp: &ntp [0.pool.ntp.org, 1.pool.ntp.org]
+
+cloud_provider:
+  template: {name: cpi, release: bosh-azure-cpi}
+
+  ssh_tunnel:
+    host: 104.43.202.45
+    port: 22
+    user: vcap
+    private_key: ~/.ssh/id_rsa # Path relative to this manifest file
+
+  mbus: https://mbus:mbus-password@104.43.202.45:6868
+
+  properties:
+    azure: *azure
+    agent: {mbus: "https://mbus:mbus-password@0.0.0.0:6868"}
+    blobstore: {provider: local, path: /var/vcap/micro_bosh/data/cache}
+    ntp: *ntp
